@@ -1,0 +1,184 @@
+---
+title: "Storm Data Report"
+author: "Lucy Bridges"
+date: "2 January 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width=12, fig.height=6)
+```
+
+```{r libraries}
+library(readr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+```
+
+## Synopsis
+
+This report aims to evaluate the most harmful storm related events in the United States, in terms of human health and economic costs.
+
+It uses the United States National Weather Service Storm Data, published by U.S. National Oceanic and Atmospheric Administration (NOAA). It is a datset with nearly a million rows of observations, dating from 1950 to 2011.
+
+The report shows that, in terms of human health, tornadoes and excessive heat or flooding, are responsible for the most harm. Flooding is the biggest cause of property damage, in monetary terms. In terms of crop damage, too little or too much water is responsible for the most damage.
+
+## Data Processing
+
+The data have been loaded directly from the compressed file using the readr function read_csv. Some formatting is then performed to make later analysis easier. In particular, strings are converted to uppercase and date strings are converted to date objects.
+
+The columns containing damage costs (PROPDMG for property-related damages and CROPDMG for crop-related damages) are altered based the values in the associated exponent columns (PROPDMGEXP and CROPDMGEXP, respectively). This has the side-effect of ignoring a very small number of extaneous values in the exponent columns.
+
+The BGN_DATE column is used to represent the date of the event. It is acknowleged that some events take place over multiple days, but this value, showing the start of the event was chosen for simplicity and should be sufficient for the purposes of this analysis.
+
+Finally, unwanted columns are removed to reduce the size of the dataset and to make it clear what columns are used in the analysis.
+
+```{r processing, cache = TRUE}
+stormdata <- read_csv("data/StormData.csv.bz2")
+
+#Tidy formatting
+stormdata$BGN_DATE   <- mdy_hms(stormdata$BGN_DATE)
+stormdata$EVTYPE     <- toupper(stormdata$EVTYPE)
+stormdata$PROPDMGEXP <- toupper(stormdata$PROPDMGEXP)
+stormdata$CROPDMGEXP <- toupper(stormdata$CROPDMGEXP)
+
+#Calculate damage costs based on the exponent information
+stormdata <- stormdata %>%
+  mutate(
+    PROPDMG = case_when(
+      PROPDMGEXP == 'H' ~ PROPDMG * 100,
+      PROPDMGEXP == 'K' ~ PROPDMG * 1000,
+      PROPDMGEXP == 'M' ~ PROPDMG * 1000000,
+      PROPDMGEXP == 'B' ~ PROPDMG * 1000000000
+    )
+  ) %>%
+  mutate(
+    CROPDMG = case_when(
+      CROPDMGEXP == 'H' ~ CROPDMG * 100,
+      CROPDMGEXP == 'K' ~ CROPDMG * 1000,
+      CROPDMGEXP == 'M' ~ CROPDMG * 1000000,
+      CROPDMGEXP == 'B' ~ CROPDMG * 1000000000
+    )
+  )
+
+#Finally, remove unwanted columns
+stormdata <- stormdata %>% select(BGN_DATE, STATE, EVTYPE, INJURIES, FATALITIES, PROPDMG, CROPDMG)
+
+```
+
+## Results
+```{r summary}
+row.count    <- prettyNum(nrow(stormdata), big.mark = ",")
+events.count <- n_distinct(stormdata$EVTYPE)
+prop.nas     <- prettyNum(sum(is.na(stormdata$PROPDMG)), big.mark = ",")
+crop.nas     <- prettyNum(sum(is.na(stormdata$CROPDMG)), big.mark = ",")
+```
+
+
+The datset contains `r row.count` observations in total, starting in `r min(year(stormdata$BGN_DATE))` and ending in `r max(year(stormdata$BGN_DATE))`.
+
+The column EVTYPE shows the event type. Events are supposed to be recorded in a standard way, but this does not seem to be the case historically, as although recent years have 48 unique event types there are `r events.count` different events over the whole dataset.
+
+The injuries and fatalities data seems complete, with no NAs. The PROPDMG column has `r prop.nas` missing values and the CROPDMG colomun has `r crop.nas` missing values. It appears that the majority of the property and crop damage data is from after 1993. In particular, there are no values for crop damage before January 1993.
+
+### Harm to Population Health
+
+The top ten event types responsible for the highest number of injuries and fatalities are shown in Figure 1. This shows that tornadoes are by far the most damaging to population health (TSTM WIND is likely another recording of tornado), with flooding and excessive heat coming second and third - heat being more deadly than flooding.
+
+```{r pop.health}
+#Injuries by event (table)
+injuries <- stormdata %>%
+  group_by(Event = EVTYPE) %>%
+  summarise(Injuries = sum(INJURIES)) %>%
+  top_n(10, Injuries) %>%
+  arrange(desc(Injuries))
+injuries$Injuries <- prettyNum(injuries$Injuries, big.mark = ",")
+
+#Fatalities by event (table)
+fatalities <- stormdata %>%
+  group_by(Event = EVTYPE) %>%
+  summarise(Fatalities = sum(FATALITIES)) %>%
+  top_n(10, Fatalities) %>%
+  arrange(desc(Fatalities))
+fatalities$Fatalities <- prettyNum(fatalities$Fatalities, big.mark = ",")
+
+grid.arrange(tableGrob(injuries), tableGrob(fatalities), ncol = 2, top = "Harm to Persons (figure 1)")
+```
+
+### Economic Consequences
+
+The costs of the damage caused by events are recorded in two columns, PROPDMG for property-related damages, and CROPDMG, for crop-related damages. These have been adjusted during import with the values in the associated exponent columns (PROPDMGEXP and CROPDMGEXP, respectively). There were a very small number of extaneous values in the exponent columns and these have been ignored for this analysis.
+
+The results in figure 2 shows flooding to be responsible for the highest amount of property damage; $145 billion, in total. Hurricanes and tornadoes are in second and third places respectively.
+
+Drought is the largest cause of crop damage, causing $13 billion in total, with different types of flooding in second and third places.
+
+```{r economic}
+#Property damage per event (table)
+property <- stormdata %>%
+  group_by(Event = EVTYPE) %>%
+  summarise(Property.Damage = sum(PROPDMG, na.rm = T)/1000000) %>%
+  top_n(10, Property.Damage) %>%
+  arrange(desc(Property.Damage))
+property$Property.Damage <- prettyNum(property$Property.Damage, big.mark = ",", digits = 2)
+
+#Crop damage per event (table)
+crop <- stormdata %>%
+  group_by(Event = EVTYPE) %>%
+  summarise(Crop.Damage = sum(CROPDMG, na.rm = T)/1000000) %>%
+  top_n(10, Crop.Damage) %>%
+  arrange(desc(Crop.Damage))
+crop$Crop.Damage <- prettyNum(crop$Crop.Damage, big.mark = ",", digits = 2)
+
+grid.arrange(tableGrob(property), tableGrob(crop), ncol = 2, top = "Damages in Millions of US Dollars (figure 2)")
+```
+
+
+## An in-depth look at wind-related events
+
+This section takes a more detailed look at wind-related events, since they are highly damaging to population health and property. Tornadoes, general wind events (which may also include tornadoes at different points in time) and hurricanes are considered.
+
+The graphs in figure 3 show the number of injuries/fatalities and the damages, per year. 
+
+The number of recorded fatalities from wind-related events has increased since 1995. The number of recorded injuries has slightly increased over time, with five large spikes. In particular, there is a noticeable spike in 1998; the time of one of the worst North Atlantic hurricane seasons on record.
+
+There has been a steady increase in recorded property damage during these years. It appears the cost of crop damage was not recorded prior to the 1990s, making comparisons difficult.
+
+```{r wind.plot}
+
+harm.plot <- stormdata %>%
+  filter(grepl("WIND", EVTYPE) || grepl("TORNADO", EVTYPE) || grepl("HURRICANE", EVTYPE)) %>%
+  group_by(Year = year(BGN_DATE)) %>%
+  summarise(Fatalities = sum(FATALITIES, na.rm = T), Injuries = sum(INJURIES, na.rm = T)) %>%
+  gather("type", "cases", 2:3) %>%
+  ggplot(aes(Year, cases)) +
+  geom_line(aes(color = type)) +
+  labs(color = "") +
+  ylab("Cases (per year)")
+
+cost.plot <- stormdata %>%
+  filter(grepl("WIND", EVTYPE) || grepl("TORNADO", EVTYPE) || grepl("HURRICANE", EVTYPE)) %>%
+  group_by(Year = year(BGN_DATE)) %>%
+  summarise(Property = sum(PROPDMG, na.rm = T), Crop = sum(CROPDMG, na.rm = T)) %>%
+  gather("type", "Cost", 2:3) %>%
+  ggplot(aes(Year, Cost)) +
+  geom_line(aes(color = type)) +
+  labs(color = "") +
+  ylab("Cost (per year)") +
+  scale_y_log10(labels = c("$100M", "$1B", "$10B", "$100B"), 
+                breaks = c(100000000, 1000000000, 10000000000, 100000000000) )
+
+grid.arrange(harm.plot, cost.plot, nrow = 1, top = "Wind-related Events (figure 3)")
+```
+
+
+## Conclusions
+
+The results show that tornadoes are the biggest cause of harm to populations, in terms of injuries and fatalities. Flooding and excessive heat are the next biggest causes.
+
+There is a difference in economic consequences between property and crop, as would be expected. Flooding is the biggest cause of damage to property, with drought and flooding the biggest causes of damage to crops. Although it appears that crop data has only begun be recorded more recently (since 1993). 
+
+Inconsistency in the recording of different event types could be a potential issue and this was not explored in this analysis. Many event types that could be considered the same are recorded differently over time. If they were amalgamated or further normalised this could improve the accuracy of the results. Further work could also be done to look at the results by state.
