@@ -1,6 +1,6 @@
 ---
-title: "Storm Data Report"
-author: "Lucy Bridges"
+title: "Evaluation of the impact of storm-related events to population health and economic costs in the US"
+author: "Lucy"
 date: "2 January 2018"
 output: html_document
 ---
